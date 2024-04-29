@@ -3,12 +3,13 @@ package main
 import (
 	"fmt"
 	"object-pool-go/pkg/pool"
+	"time"
 )
 
 func main() {
 	fmt.Println("Object Pool Pattern in Go")
 
-	connPool := pool.NewConnectionPool(2) // Example with a pool size of 2
+	connPool := pool.NewConnectionPool(2, 5*time.Second) // Pool size of 2 and timeout of 5 seconds
 
 	// Borrow a connection
 	conn, err := connPool.BorrowConnection()
