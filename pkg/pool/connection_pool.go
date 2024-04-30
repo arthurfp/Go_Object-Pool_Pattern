@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// ConnectionPool manages a pool of database connections.
 type ConnectionPool struct {
 	mutex        sync.Mutex
 	connections  []*database.Connection
@@ -15,7 +14,6 @@ type ConnectionPool struct {
 	timeout      time.Duration
 }
 
-// NewConnectionPool initializes a new connection pool with a specified size and timeout.
 func NewConnectionPool(maxOpenConns int, timeout time.Duration) *ConnectionPool {
 	pool := &ConnectionPool{
 		connections:  make([]*database.Connection, 0, maxOpenConns),
@@ -23,34 +21,49 @@ func NewConnectionPool(maxOpenConns int, timeout time.Duration) *ConnectionPool 
 		timeout:      timeout,
 	}
 	for i := 0; i < maxOpenConns; i++ {
-		pool.connections = append(pool.connections, &database.Connection{ID: i})
+		conn := &database.Connection{ID: i}
+		if conn.HealthCheck() {
+			pool.connections = append(pool.connections, conn)
+		}
 	}
 	return pool
 }
 
-// BorrowConnection attempts to borrow a connection from the pool, waiting if necessary until one is available or the timeout is exceeded.
 func (p *ConnectionPool) BorrowConnection() (*database.Connection, error) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	if len(p.connections) == 0 {
+	// Wait until a connection becomes available or the timeout is reached
+	timeoutChan := time.After(p.timeout)
+	for {
+		for len(p.connections) > 0 {
+			conn := p.connections[0]
+			p.connections = p.connections[1:]
+			if conn.HealthCheck() {
+				return conn, nil
+			}
+		}
+
 		select {
-		case <-time.After(p.timeout):
-			return nil, errors.New("timeout exceeded, no connections available")
+		case <-timeoutChan:
+			return nil, errors.New("timeout exceeded, no healthy connections available")
 		default:
+			time.Sleep(100 * time.Millisecond) // Prevent busy looping
 		}
 	}
-
-	conn := p.connections[0]
-	p.connections = p.connections[1:]
-	return conn, nil
 }
 
-// ReleaseConnection returns a connection to the pool, resetting it for reuse.
 func (p *ConnectionPool) ReleaseConnection(conn *database.Connection) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	conn.Reset()
-	p.connections = append([]*database.Connection{conn}, p.connections...)
+	if conn.HealthCheck() {
+		p.connections = append([]*database.Connection{conn}, p.connections...)
+	} else {
+		// Replace unhealthy connection
+		newConn := &database.Connection{ID: conn.ID}
+		if newConn.HealthCheck() {
+			p.connections = append([]*database.Connection{newConn}, p.connections...)
+		}
+	}
 }
